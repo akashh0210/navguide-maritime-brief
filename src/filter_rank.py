@@ -15,6 +15,31 @@ from news_sources import fetch_all
 
 log = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Market-research spam filter
+# ---------------------------------------------------------------------------
+
+# Auto-generated press releases from firms like Fact.MR, Grand View Research,
+# and similar SEO content mills flood maritime RSS searches. They masquerade as
+# news but contain no actual events. Matching any pattern below disqualifies an
+# article from the candidate pool entirely so it cannot pollute top_stories or
+# the opportunity_signal.
+_SPAM_PATTERNS = [
+    re.compile(r"\bmarket\b.{0,60}\b(forecast|cagr|analysis\s+report|market\s+size|research\s+report|market\s+study)\b", re.I),
+    re.compile(r"\bglobal\s+market\b", re.I),
+    re.compile(r"\bmarket\b.{0,50}\b20[3-9]\d\b", re.I),   # "... market ... 2036"
+    re.compile(r"\bto\s+reach\b.{0,60}\b(usd|billion|million)\b", re.I),
+    re.compile(r"\bcompound\s+annual\s+growth\b", re.I),
+    re.compile(r"\bmarket\s+size\b", re.I),
+]
+
+
+def _is_spam(article: dict) -> bool:
+    """Return True for market-research press releases masquerading as news."""
+    # Check title only - snippets can accidentally contain numbers that match.
+    return any(p.search(article.get("title", "")) for p in _SPAM_PATTERNS)
+
+
 # Keywords used for relevance scoring. Each hit adds 1 point (capped at 5).
 _RANK_KEYWORDS = [
     "shipowner", "port", "inspection", "detention", "imo", "sanctions",
@@ -160,6 +185,12 @@ def filter_and_rank(articles: list[dict]) -> dict:
     if not articles:
         log.warning("filter_and_rank received 0 articles - nothing to rank")
         return {"candidates": [], "incident_candidates": [], "low_volume": True}
+
+    pre_spam = len(articles)
+    articles = [a for a in articles if not _is_spam(a)]
+    removed = pre_spam - len(articles)
+    if removed:
+        log.info("Spam filter: removed %d market-research articles", removed)
 
     deduped = _dedupe(articles)
     log.info("Dedupe: %d raw -> %d unique articles", len(articles), len(deduped))

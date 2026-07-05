@@ -131,6 +131,12 @@ major_incidents  (list, any length including empty):
         to incident_type - do not silently drop a real incident.
     (c) Within 7 days: use the article DATE field to confirm recency.
 
+  (d) Real outcome, not a near-miss: near-miss, avoidance, and "prevented" events
+      do NOT qualify. A ship that avoided a collision, a crew that prevented a fire,
+      or a hijacking that was repelled before boarding does NOT go here. Only include
+      events where the vessel was physically damaged, grounded, detained, or subject
+      to a concrete legal / sanctions action that took effect.
+
   Characterise each incident from the article content, not from which query label it
   arrived under. Do not assume "grounding" just because it came via the grounding query.
 
