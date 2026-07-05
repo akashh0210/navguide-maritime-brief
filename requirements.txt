@@ -3,3 +3,4 @@ google-genai
 python-dateutil
 beautifulsoup4
 requests
+python-dotenv
