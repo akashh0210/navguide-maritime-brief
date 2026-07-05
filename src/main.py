@@ -22,10 +22,13 @@ log = logging.getLogger(__name__)
 
 def main() -> None:
     # Load .env for local testing. GitHub Actions provides env vars via Secrets.
+    # load_dotenv() returns True only when a .env file is actually found; on the
+    # GitHub runner no .env file exists and the call is a silent no-op, so the
+    # secrets already injected by the workflow env: block are used directly.
     try:
         from dotenv import load_dotenv
-        load_dotenv()
-        log.info("Loaded .env (local mode)")
+        if load_dotenv():
+            log.info("Loaded .env (local mode)")
     except ImportError:
         pass  # python-dotenv not installed; env vars must already be set
 
