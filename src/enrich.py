@@ -9,6 +9,9 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from typing import Optional
+
+from pydantic import BaseModel
 
 sys.path.insert(0, os.path.dirname(__file__))
 from news_sources import fetch_all
@@ -20,6 +23,39 @@ log = logging.getLogger(__name__)
 # google-genai 2.10.0 accepts "gemini-2.5-flash" as a stable alias.
 # If the API returns a model-not-found error, update to "gemini-2.0-flash".
 _MODEL = "gemini-2.5-flash"
+
+
+# ---------------------------------------------------------------------------
+# Response schema (Pydantic)
+# Used as response_schema= in GenerateContentConfig so Gemini is forced to
+# return valid JSON matching this shape. Confirmed usable in google-genai
+# 2.10.0: response_schema accepts Union[dict, type, Schema, ...] per
+# GenerateContentConfig.model_fields inspection.
+# ---------------------------------------------------------------------------
+
+class _TopStory(BaseModel):
+    title: str
+    two_line_summary: str
+    link: str
+
+
+class _MajorIncident(BaseModel):
+    vessel_or_headline: str
+    incident_type: str
+    two_line_summary: str
+    link: str
+
+
+class _OpportunitySignal(BaseModel):
+    headline: str
+    why_it_matters: str
+
+
+class _BriefOutput(BaseModel):
+    top_stories: list[_TopStory]
+    major_incidents: list[_MajorIncident]
+    # Optional allows null; Gemini honours this when no signal qualifies.
+    opportunity_signal: Optional[_OpportunitySignal]
 
 
 # ---------------------------------------------------------------------------
@@ -221,13 +257,26 @@ def call_gemini(
     client = genai.Client(api_key=api_key)
     prompt = _build_prompt(candidates, incident_candidates, low_volume)
 
-    # response_mime_type="application/json" tells Gemini to return raw JSON
-    # without markdown fences or prose framing. Confirmed available in
-    # google-genai 2.10.0 via GenerateContentConfig.model_fields inspection.
+    # Structured output config - three fixes for the truncation/parse problem:
+    #
+    # 1. response_schema=_BriefOutput: forces Gemini to emit valid JSON
+    #    matching the Pydantic schema, so the response is always parseable.
+    #    Requires response_mime_type="application/json" (confirmed 2.10.0).
+    #
+    # 2. thinking_budget=0: gemini-2.5-flash has thinking enabled by default.
+    #    Thinking tokens consume the output budget first, leaving insufficient
+    #    tokens for the full JSON answer and causing mid-string truncation.
+    #    Setting thinking_budget=0 disables thinking so the full budget goes
+    #    to the answer. ThinkingConfig.thinking_budget confirmed in 2.10.0.
+    #
+    # 3. max_output_tokens=8192: headroom so even a large candidate set
+    #    cannot hit the limit and truncate the response.
     config = types.GenerateContentConfig(
         response_mime_type="application/json",
-        temperature=0.2,      # low temperature for factual structured output
-        max_output_tokens=4096,
+        response_schema=_BriefOutput,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        temperature=0.3,
+        max_output_tokens=8192,
     )
 
     last_exc: Exception | None = None
@@ -244,7 +293,25 @@ def call_gemini(
             if not raw or not raw.strip():
                 raise ValueError("Gemini returned an empty response")
 
-            data = json.loads(raw)
+            # Strip markdown code fences in case the model wraps the JSON
+            # despite response_mime_type instructing it not to.
+            cleaned = raw.strip()
+            if cleaned.startswith("```"):
+                cleaned = cleaned.split("\n", 1)[-1]  # drop opening fence line
+                cleaned = cleaned.rsplit("```", 1)[0]  # drop closing fence
+                cleaned = cleaned.strip()
+
+            try:
+                data = json.loads(cleaned)
+            except json.JSONDecodeError:
+                # Log the raw text so the cause of any future failure is visible
+                # in the GitHub Actions log without having to re-run.
+                log.warning(
+                    "Raw Gemini response (first 800 chars): %s",
+                    cleaned[:800],
+                )
+                raise
+
             _validate(data)
             data.setdefault("fallback_used", False)
             log.info("Gemini call attempt %d succeeded", attempt)
